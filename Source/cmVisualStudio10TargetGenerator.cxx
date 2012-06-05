@@ -595,10 +595,12 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
                     "xmlns=\"http://schemas.microsoft.com/"
                     "developer/msbuild/2003\">\n",
                     0);
+
+  std::set<std::string> additionalGroups;
   for(ToolSourceMap::const_iterator ti = this->Tools.begin();
       ti != this->Tools.end(); ++ti)
     {
-    this->WriteGroupSources(ti->first.c_str(), ti->second, sourceGroups);
+    this->WriteGroupSources(ti->first.c_str(), ti->second, sourceGroups, additionalGroups);
     }
 
   // Add object library contents as external objects.
@@ -643,6 +645,22 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
       this->WriteString("</Filter>\n", 2);
       }
     }
+  for (auto itr = additionalGroups.begin(); itr != additionalGroups.end(); ++itr)
+  {
+      this->WriteString("<Filter Include=\"", 2);
+      (*this->BuildFileStream) << (*itr) << "\">\n";
+      std::string guidName = "SG_Filter_";
+      guidName += *itr;
+      this->GlobalGenerator->CreateGUID(guidName.c_str());
+      this->WriteString("<UniqueIdentifier>", 3);
+      std::string guid 
+        = this->GlobalGenerator->GetGUID(guidName.c_str());
+      (*this->BuildFileStream) 
+        << "{"
+        << guid << "}"
+        << "</UniqueIdentifier>\n";
+      this->WriteString("</Filter>\n", 2);
+  }
   if(!objs.empty())
     {
     this->WriteString("<Filter Include=\"Object Libraries\">\n", 2);
@@ -716,8 +734,91 @@ void
 cmVisualStudio10TargetGenerator::
 WriteGroupSources(const char* name,
                   ToolSources const& sources,
-                  std::vector<cmSourceGroup>& sourceGroups)
+                  std::vector<cmSourceGroup>& sourceGroups,
+                  std::set<std::string>& additioalGroups)
 {
+    // Find the longest common path
+    std::string common;
+    size_t common_size = 0;
+    for (ToolSources::const_iterator s = sources.begin(); s != sources.end(); ++s)
+    {
+        cmSourceFile* sf = s->SourceFile;
+        std::string const& source = sf->GetFullPath();
+        std::string path = this->ConvertPath(source, s->RelativePath);
+        this->ConvertToWindowsSlash(path);
+
+        if (s == sources.begin())
+        {
+            common = path;
+            common_size = path.size();
+        }
+        else
+        {
+            size_t i;
+            for (i = 0; i < common_size && i < path.size(); ++i)
+            {
+                if (common.c_str()[i] != path.c_str()[i])
+                    break;
+            }
+
+            common_size = i;
+        }
+    }
+
+    while (common_size > 0 && common.c_str()[common_size-1] != '\\')
+        --common_size;
+
+    if (common_size > 0)
+    {
+        this->WriteString("<!-- Common Path: ", 1);
+        (*this->BuildFileStream) << std::string(common.c_str(), common_size) << " -->\n";
+        this->WriteString("<ItemGroup>\n", 1);
+        for (ToolSources::const_iterator s = sources.begin(); s != sources.end(); ++s)
+        {
+            cmSourceFile* sf = s->SourceFile;
+            std::string const& source = sf->GetFullPath();
+            this->WriteString("<", 2); 
+            std::string path = this->ConvertPath(source, s->RelativePath);
+            this->ConvertToWindowsSlash(path);
+            (*this->BuildFileStream) << name << " Include=\"" << path;
+
+            bool written = false;
+            std::string::size_type off = std::string::npos;
+            while ((off = path.find_last_of('\\', off)) != std::string::npos && common_size < off)
+            {
+                std::string filter(path.c_str() + common_size, off - common_size);
+
+                if (additioalGroups.find(filter) == additioalGroups.end())
+                    additioalGroups.insert(filter);
+
+                if (!written)
+                {
+                    written = true;
+                    (*this->BuildFileStream) << "\">\n";
+                    this->WriteString("<Filter>", 3);
+                    (*this->BuildFileStream) << filter << "</Filter>\n";
+                    this->WriteString("</", 2);
+                    (*this->BuildFileStream) << name << ">\n";
+                }
+
+                if (off != std::string::npos + 1)
+                    --off;
+                else
+                    break;
+            }
+
+            if (!written)
+            {
+                (*this->BuildFileStream) << "\" />\n";
+            }
+        }
+        this->WriteString("</ItemGroup>\n", 1);
+    }
+    else
+    {
+        this->WriteString("<!-- fallback -->\n", 1);
+        // Fallback to default behavior
+
   this->WriteString("<ItemGroup>\n", 1);
   for(ToolSources::const_iterator s = sources.begin();
       s != sources.end(); ++s)
@@ -746,6 +847,8 @@ WriteGroupSources(const char* name,
       }
     }
   this->WriteString("</ItemGroup>\n", 1);
+
+    }
 }
 
 void cmVisualStudio10TargetGenerator::WriteSource(
