@@ -636,16 +636,16 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
       guidName += name;
       this->GlobalGenerator->CreateGUID(guidName.c_str());
       this->WriteString("<UniqueIdentifier>", 3);
-      std::string guid 
+      std::string guid
         = this->GlobalGenerator->GetGUID(guidName.c_str());
-      (*this->BuildFileStream) 
+      (*this->BuildFileStream)
         << "{"
         << guid << "}"
         << "</UniqueIdentifier>\n";
       this->WriteString("</Filter>\n", 2);
       }
     }
-  for (auto itr = additionalGroups.begin(); itr != additionalGroups.end(); ++itr)
+  for (std::set<std::string>::const_iterator itr = additionalGroups.begin(); itr != additionalGroups.end(); ++itr)
   {
       this->WriteString("<Filter Include=\"", 2);
       (*this->BuildFileStream) << (*itr) << "\">\n";
@@ -653,9 +653,9 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
       guidName += *itr;
       this->GlobalGenerator->CreateGUID(guidName.c_str());
       this->WriteString("<UniqueIdentifier>", 3);
-      std::string guid 
+      std::string guid
         = this->GlobalGenerator->GetGUID(guidName.c_str());
-      (*this->BuildFileStream) 
+      (*this->BuildFileStream)
         << "{"
         << guid << "}"
         << "</UniqueIdentifier>\n";
