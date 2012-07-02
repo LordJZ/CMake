@@ -569,9 +569,9 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
   for(std::vector<cmSourceFile*>::const_iterator s = classes.begin(); 
       s != classes.end(); s++)
     {
-    cmSourceFile* sf = *s; 
+    cmSourceFile* sf = *s;
     std::string const& source = sf->GetFullPath();
-    cmSourceGroup& sourceGroup = 
+    cmSourceGroup& sourceGroup =
       this->Makefile->FindSourceGroup(source.c_str(), sourceGroups);
     groupsUsed.insert(&sourceGroup);
     }
@@ -597,10 +597,49 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
                     0);
 
   std::set<std::string> additionalGroups;
+
+    // Find the longest common path
+    std::string common;
+    size_t common_size = 0;
+    for (ToolSourceMap::const_iterator ti = this->Tools.begin(); ti != this->Tools.end(); ++ti)
+    {
+        ToolSources const& sources = ti->second;
+        for (ToolSources::const_iterator s = sources.begin(); s != sources.end(); ++s)
+        {
+            cmSourceFile* sf = s->SourceFile;
+            std::string const& source = sf->GetFullPath();
+            std::string path = this->ConvertPath(source, s->RelativePath);
+            this->ConvertToWindowsSlash(path);
+
+            if (s == sources.begin())
+            {
+                common = path;
+                common_size = path.size();
+            }
+            else
+            {
+                size_t i;
+                for (i = 0; i < common_size && i < path.size(); ++i)
+                {
+                    if (common.c_str()[i] != path.c_str()[i])
+                        break;
+                }
+
+                common_size = i;
+            }
+        }
+    }
+
+    while (common_size > 0 && common.c_str()[common_size-1] != '\\')
+        --common_size;
+
+    this->WriteString("<!-- Common Path: ", 1);
+    (*this->BuildFileStream) << std::string(common.c_str(), common_size) << " -->\n";
+
   for(ToolSourceMap::const_iterator ti = this->Tools.begin();
       ti != this->Tools.end(); ++ti)
     {
-    this->WriteGroupSources(ti->first.c_str(), ti->second, sourceGroups, additionalGroups);
+    this->WriteGroupSources(ti->first.c_str(), ti->second, sourceGroups, additionalGroups, common_size);
     }
 
   // Add object library contents as external objects.
@@ -623,6 +662,8 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
     }
 
   this->WriteString("<ItemGroup>\n", 1);
+  if (!(common_size > 0))
+  {
   for(std::set<cmSourceGroup*>::iterator g = groupsUsed.begin();
       g != groupsUsed.end(); ++g)
     {
@@ -645,21 +686,25 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
       this->WriteString("</Filter>\n", 2);
       }
     }
-  for (std::set<std::string>::const_iterator itr = additionalGroups.begin(); itr != additionalGroups.end(); ++itr)
+  }
+  else
   {
-      this->WriteString("<Filter Include=\"", 2);
-      (*this->BuildFileStream) << (*itr) << "\">\n";
-      std::string guidName = "SG_Filter_";
-      guidName += *itr;
-      this->GlobalGenerator->CreateGUID(guidName.c_str());
-      this->WriteString("<UniqueIdentifier>", 3);
-      std::string guid
-        = this->GlobalGenerator->GetGUID(guidName.c_str());
-      (*this->BuildFileStream)
-        << "{"
-        << guid << "}"
-        << "</UniqueIdentifier>\n";
-      this->WriteString("</Filter>\n", 2);
+      for (std::set<std::string>::const_iterator itr = additionalGroups.begin(); itr != additionalGroups.end(); ++itr)
+      {
+          this->WriteString("<Filter Include=\"", 2);
+          (*this->BuildFileStream) << (*itr) << "\">\n";
+          std::string guidName = "SG_Filter_";
+          guidName += *itr;
+          this->GlobalGenerator->CreateGUID(guidName.c_str());
+          this->WriteString("<UniqueIdentifier>", 3);
+          std::string guid
+            = this->GlobalGenerator->GetGUID(guidName.c_str());
+          (*this->BuildFileStream)
+            << "{"
+            << guid << "}"
+            << "</UniqueIdentifier>\n";
+          this->WriteString("</Filter>\n", 2);
+      }
   }
   if(!objs.empty())
     {
@@ -735,43 +780,11 @@ cmVisualStudio10TargetGenerator::
 WriteGroupSources(const char* name,
                   ToolSources const& sources,
                   std::vector<cmSourceGroup>& sourceGroups,
-                  std::set<std::string>& additioalGroups)
+                  std::set<std::string>& additioalGroups,
+                  size_t common_size)
 {
-    // Find the longest common path
-    std::string common;
-    size_t common_size = 0;
-    for (ToolSources::const_iterator s = sources.begin(); s != sources.end(); ++s)
-    {
-        cmSourceFile* sf = s->SourceFile;
-        std::string const& source = sf->GetFullPath();
-        std::string path = this->ConvertPath(source, s->RelativePath);
-        this->ConvertToWindowsSlash(path);
-
-        if (s == sources.begin())
-        {
-            common = path;
-            common_size = path.size();
-        }
-        else
-        {
-            size_t i;
-            for (i = 0; i < common_size && i < path.size(); ++i)
-            {
-                if (common.c_str()[i] != path.c_str()[i])
-                    break;
-            }
-
-            common_size = i;
-        }
-    }
-
-    while (common_size > 0 && common.c_str()[common_size-1] != '\\')
-        --common_size;
-
     if (common_size > 0)
     {
-        this->WriteString("<!-- Common Path: ", 1);
-        (*this->BuildFileStream) << std::string(common.c_str(), common_size) << " -->\n";
         this->WriteString("<ItemGroup>\n", 1);
         for (ToolSources::const_iterator s = sources.begin(); s != sources.end(); ++s)
         {

@@ -86,7 +86,7 @@ private:
   void WriteEvent(const char* name, std::vector<cmCustomCommand> & commands,
                   std::string const& configName);
   void WriteGroupSources(const char* name, ToolSources const& sources,
-                         std::vector<cmSourceGroup>&, std::set<std::string>&);
+                         std::vector<cmSourceGroup>&, std::set<std::string>&, size_t);
   void AddMissingSourceGroups(std::set<cmSourceGroup*>& groupsUsed,
                               const std::vector<cmSourceGroup>& allGroups);
 
