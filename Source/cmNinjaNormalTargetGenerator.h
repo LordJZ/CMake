@@ -15,8 +15,12 @@
 
 #  include "cmNinjaTargetGenerator.h"
 #  include "cmNinjaTypes.h"
+#  include "cmStandardIncludes.h"
+
+#  include <set>
 
 class cmSourceFile;
+class cmOSXBundleGenerator;
 
 class cmNinjaNormalTargetGenerator : public cmNinjaTargetGenerator
 {
@@ -30,13 +34,10 @@ private:
   std::string LanguageLinkerRule() const;
   const char* GetVisibleTypeName() const;
   void WriteLanguagesRules();
-  void WriteLinkRule();
+  void WriteLinkRule(bool useResponseFile);
   void WriteLinkStatement();
   void WriteObjectLibStatement();
   std::vector<std::string> ComputeLinkCmd();
-
-  void EnsureDirectoryExists(const std::string& dir);
-  void EnsureParentDirectoryExists(const std::string& path);
 
 private:
   // Target name info.

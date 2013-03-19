@@ -18,13 +18,15 @@
 #include "cmTarget.h" // For cmTargets
 #include "cmTargetDepend.h" // For cmTargetDependSet
 #include "cmSystemTools.h" // for cmSystemTools::OutputOption
+#include "cmExportSetMap.h" // For cmExportSetMap
+#include "cmGeneratorTarget.h"
+
 class cmake;
 class cmGeneratorTarget;
 class cmMakefile;
 class cmLocalGenerator;
 class cmExternalMakefileProjectGenerator;
 class cmTarget;
-class cmTargetExport;
 class cmInstallTargetGenerator;
 class cmInstallFilesGenerator;
 
@@ -47,8 +49,9 @@ public:
   ///! Get the name for this generator
   virtual const char *GetName() const { return "Generic"; };
 
-  /** Get the documentation entry for this generator.  */
-  virtual void GetDocumentation(cmDocumentationEntry& entry) const;
+  /** Set the generator-specific toolset name.  Returns true if toolset
+      is supported and false otherwise.  */
+  virtual bool SetGeneratorToolset(std::string const& ts);
 
   /**
    * Create LocalGenerators and process the CMakeLists files. This does not
@@ -127,8 +130,8 @@ public:
   void SetCMakeInstance(cmake *cm);
 
   ///! Get the CMake instance
-  cmake *GetCMakeInstance() { return this->CMakeInstance; };
-  const cmake *GetCMakeInstance() const { return this->CMakeInstance; };
+  cmake *GetCMakeInstance() { return this->CMakeInstance; }
+  const cmake *GetCMakeInstance() const { return this->CMakeInstance; }
 
   void SetConfiguredFilesPath(cmGlobalGenerator* gen);
   const std::vector<cmLocalGenerator *>& GetLocalGenerators() const {
@@ -151,18 +154,9 @@ public:
   void AddInstallComponent(const char* component);
 
   const std::set<cmStdString>* GetInstallComponents() const
-  { return &InstallComponents; }
+    { return &this->InstallComponents; }
 
-  ///! Add one installed target to the sets of the exports
-  void AddTargetToExports(const char* exportSet, cmTarget* target,
-                          cmInstallTargetGenerator* archive,
-                          cmInstallTargetGenerator* runTime,
-                          cmInstallTargetGenerator* library,
-                          cmInstallTargetGenerator* framework,
-                          cmInstallTargetGenerator* bundle,
-                          cmInstallFilesGenerator* publicHeaders);
-  ///! Get the export target set with the   given name
-  const std::vector<cmTargetExport*>* GetExportSet(const char* name) const;
+  cmExportSetMap& GetExportSets() {return this->ExportSets;}
 
   /** Add a file to the manifest of generated targets for a configuration.  */
   void AddToManifest(const char* config, std::string const& f);
@@ -222,7 +216,7 @@ public:
   /** Get the manifest of all targets that will be built for each
       configuration.  This is valid during generation only.  */
   cmTargetManifest const& GetTargetManifest() const
-  { return this->TargetManifest; }
+    { return this->TargetManifest; }
 
   /** Get the content of a directory.  Directory listings are loaded
       from disk at most once and cached.  During the generation step
@@ -277,8 +271,12 @@ public:
       i.e. "Can I build Debug and Release in the same tree?" */
   virtual bool IsMultiConfig() { return false; }
 
+  std::string GetSharedLibFlagsForLanguage(std::string const& lang);
+
   /** Generate an <output>.rule file path for a given command output.  */
   virtual std::string GenerateRuleFile(std::string const& output) const;
+
+  static std::string EscapeJSON(const std::string& s);
 
 protected:
   typedef std::vector<cmLocalGenerator*> GeneratorVector;
@@ -324,15 +322,13 @@ protected:
   cmLocalGenerator* CurrentLocalGenerator;
   // map from project name to vector of local generators in that project
   std::map<cmStdString, std::vector<cmLocalGenerator*> > ProjectMap;
-  std::map<cmLocalGenerator*, std::set<cmTarget *> >
-  LocalGeneratorToTargetMap;
+  std::map<cmLocalGenerator*, std::set<cmTarget *> > LocalGeneratorToTargetMap;
 
   // Set of named installation components requested by the project.
   std::set<cmStdString> InstallComponents;
   bool InstallTargetEnabled;
   // Sets of named target exports
-  std::map<cmStdString, std::vector<cmTargetExport*> > ExportSets;
-  void ClearExportSets();
+  cmExportSetMap ExportSets;
 
   // Manifest of all targets that will be built for each configuration.
   // This is computed just before local generators generate.
@@ -344,6 +340,7 @@ protected:
 
   virtual const char* GetPredefinedTargetsFolder();
   virtual bool UseFolderProperty();
+  void EnableMinGWLanguage(cmMakefile *mf);
 
 private:
   cmMakefile* TryCompileOuterMakefile;
@@ -357,6 +354,7 @@ private:
   std::map<cmStdString, cmStdString> LanguageToOutputExtension;
   std::map<cmStdString, cmStdString> ExtensionToLanguage;
   std::map<cmStdString, int> LanguageToLinkerPreference;
+  std::map<cmStdString, cmStdString> LanguageToOriginalSharedLibFlags;
 
   // Record hashes for rules and outputs.
   struct RuleHash { char Data[32]; };
@@ -378,8 +376,7 @@ private:
   TargetDependMap TargetDependencies;
 
   // Per-target generator information.
-  typedef std::map<cmTarget*, cmGeneratorTarget*> GeneratorTargetsType;
-  GeneratorTargetsType GeneratorTargets;
+  cmGeneratorTargetsType GeneratorTargets;
   void CreateGeneratorTargets();
   void ClearGeneratorTargets();
   virtual void ComputeTargetObjects(cmGeneratorTarget* gt) const;

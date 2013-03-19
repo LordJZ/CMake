@@ -65,6 +65,11 @@ public:
     /// target_link_libraries() fails if only argument is not a target
     CMP0016,
     CMP0017, ///< Prefer files in CMAKE_ROOT when including from CMAKE_ROOT
+    CMP0018, ///< Ignore language flags for shared libs, and adhere to
+    /// POSITION_INDEPENDENT_CODE property and *_COMPILE_OPTIONS_PI{E,C}
+    /// instead.
+    CMP0019, ///< No variable re-expansion in include and link info
+    CMP0020, ///< Automatically link Qt executables to qtmain target
 
     /** \brief Always the last entry.
      *

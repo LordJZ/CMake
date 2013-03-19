@@ -17,6 +17,8 @@
 #include "cmGeneratorTarget.h"
 #include "cmVersion.h"
 
+#include <algorithm>
+
 const char* cmGlobalNinjaGenerator::NINJA_BUILD_FILE = "build.ninja";
 const char* cmGlobalNinjaGenerator::NINJA_RULES_FILE = "rules.ninja";
 const char* cmGlobalNinjaGenerator::INDENT = "  ";
@@ -43,12 +45,13 @@ void cmGlobalNinjaGenerator::WriteComment(std::ostream& os,
   std::string replace = comment;
   std::string::size_type lpos = 0;
   std::string::size_type rpos;
+  os << "\n#############################################\n";
   while((rpos = replace.find('\n', lpos)) != std::string::npos)
     {
     os << "# " << replace.substr(lpos, rpos - lpos) << "\n";
     lpos = rpos + 1;
     }
-  os << "# " << replace.substr(lpos) << "\n";
+  os << "# " << replace.substr(lpos) << "\n\n";
 }
 
 static bool IsIdentChar(char c)
@@ -66,7 +69,7 @@ std::string cmGlobalNinjaGenerator::EncodeIdent(const std::string &ident,
   if (std::find_if(ident.begin(), ident.end(),
                    std::not1(std::ptr_fun(IsIdentChar))) != ident.end()) {
     static unsigned VarNum = 0;
-    std::ostringstream names;
+    cmOStringStream names;
     names << "ident" << VarNum++;
     vars << names.str() << " = " << ident << "\n";
     return "$" + names.str();
@@ -82,6 +85,7 @@ std::string cmGlobalNinjaGenerator::EncodeLiteral(const std::string &lit)
 {
   std::string result = lit;
   cmSystemTools::ReplaceString(result, "$", "$$");
+  cmSystemTools::ReplaceString(result, "\n", "$\n");
   return result;
 }
 
@@ -89,7 +93,10 @@ std::string cmGlobalNinjaGenerator::EncodePath(const std::string &path)
 {
   std::string result = path;
 #ifdef _WIN32
-  cmSystemTools::ReplaceString(result, "/", "\\");
+  if(UsingMinGW)
+    cmSystemTools::ReplaceString(result, "\\", "/");
+  else
+    cmSystemTools::ReplaceString(result, "/", "\\");
 #endif
   return EncodeLiteral(result);
 }
@@ -101,7 +108,9 @@ void cmGlobalNinjaGenerator::WriteBuild(std::ostream& os,
                                         const cmNinjaDeps& explicitDeps,
                                         const cmNinjaDeps& implicitDeps,
                                         const cmNinjaDeps& orderOnlyDeps,
-                                        const cmNinjaVars& variables)
+                                        const cmNinjaVars& variables,
+                                        const std::string& rspfile,
+                                        int cmdLineLimit)
 {
   // Make sure there is a rule.
   if(rule.empty())
@@ -123,56 +132,72 @@ void cmGlobalNinjaGenerator::WriteBuild(std::ostream& os,
 
   cmGlobalNinjaGenerator::WriteComment(os, comment);
 
-  std::ostringstream builds;
+  cmOStringStream arguments;
 
   // TODO: Better formatting for when there are multiple input/output files.
-
-  // Write outputs files.
-  builds << "build";
-  for(cmNinjaDeps::const_iterator i = outputs.begin();
-      i != outputs.end();
-      ++i)
-    builds << " " << EncodeIdent(EncodePath(*i), os);
-  builds << ":";
-
-  // Write the rule.
-  builds << " " << rule;
 
   // Write explicit dependencies.
   for(cmNinjaDeps::const_iterator i = explicitDeps.begin();
       i != explicitDeps.end();
       ++i)
-    builds  << " " << EncodeIdent(EncodePath(*i), os);
+    arguments  << " " << EncodeIdent(EncodePath(*i), os);
 
   // Write implicit dependencies.
   if(!implicitDeps.empty())
     {
-    builds << " |";
+    arguments << " |";
     for(cmNinjaDeps::const_iterator i = implicitDeps.begin();
         i != implicitDeps.end();
         ++i)
-      builds  << " " << EncodeIdent(EncodePath(*i), os);
+      arguments  << " " << EncodeIdent(EncodePath(*i), os);
     }
 
   // Write order-only dependencies.
   if(!orderOnlyDeps.empty())
     {
-    builds << " ||";
+    arguments << " ||";
     for(cmNinjaDeps::const_iterator i = orderOnlyDeps.begin();
         i != orderOnlyDeps.end();
         ++i)
-      builds  << " " << EncodeIdent(EncodePath(*i), os);
+      arguments  << " " << EncodeIdent(EncodePath(*i), os);
     }
 
-  builds << "\n";
+  arguments << "\n";
 
-  os << builds.str();
+  cmOStringStream build;
+
+  // Write outputs files.
+  build << "build";
+  for(cmNinjaDeps::const_iterator i = outputs.begin();
+      i != outputs.end(); ++i)
+    build << " " << EncodeIdent(EncodePath(*i), os);
+  build << ":";
+
+  // Write the rule.
+  build << " " << rule;
 
   // Write the variables bound to this build statement.
+  cmOStringStream variable_assignments;
   for(cmNinjaVars::const_iterator i = variables.begin();
-      i != variables.end();
-      ++i)
-    cmGlobalNinjaGenerator::WriteVariable(os, i->first, i->second, "", 1);
+      i != variables.end(); ++i)
+    cmGlobalNinjaGenerator::WriteVariable(variable_assignments,
+                                          i->first, i->second, "", 1);
+
+  // check if a response file rule should be used
+  std::string buildstr = build.str();
+  std::string assignments = variable_assignments.str();
+  const std::string args = arguments.str();
+  if (cmdLineLimit > 0
+      && args.size() + buildstr.size() + assignments.size()
+                                                    > (size_t) cmdLineLimit) {
+    buildstr += "_RSP_FILE";
+    variable_assignments.clear();
+    cmGlobalNinjaGenerator::WriteVariable(variable_assignments,
+                                          "RSP_FILE", rspfile, "", 1);
+    assignments += variable_assignments.str();
+  }
+
+  os << buildstr << args << assignments;
 }
 
 void cmGlobalNinjaGenerator::WritePhonyBuild(std::ostream& os,
@@ -200,6 +225,8 @@ void cmGlobalNinjaGenerator::AddCustomCommandRule()
                 "$DESC",
                 "Rule for running custom commands.",
                 /*depfile*/ "",
+                /*rspfile*/ "",
+                /*rspcontent*/ "",
                 /*restat*/ true);
 }
 
@@ -211,10 +238,17 @@ cmGlobalNinjaGenerator::WriteCustomCommandBuild(const std::string& command,
                                                 const cmNinjaDeps& deps,
                                               const cmNinjaDeps& orderOnlyDeps)
 {
+  std::string cmd = command;
+#ifdef _WIN32
+   if (cmd.empty())
+      // TODO Shouldn't an empty command be handled by ninja?
+      cmd = "cmd.exe /c";
+#endif
+
   this->AddCustomCommandRule();
 
   cmNinjaVars vars;
-  vars["COMMAND"] = command;
+  vars["COMMAND"] = cmd;
   vars["DESC"] = EncodeLiteral(description);
 
   cmGlobalNinjaGenerator::WriteBuild(*this->BuildFileStream,
@@ -227,12 +261,56 @@ cmGlobalNinjaGenerator::WriteCustomCommandBuild(const std::string& command,
                                      vars);
 }
 
+void
+cmGlobalNinjaGenerator::AddMacOSXContentRule()
+{
+  cmLocalGenerator *lg = this->LocalGenerators[0];
+  cmMakefile* mfRoot = lg->GetMakefile();
+
+  cmOStringStream cmd;
+  cmd << lg->ConvertToOutputFormat(
+           mfRoot->GetRequiredDefinition("CMAKE_COMMAND"),
+           cmLocalGenerator::SHELL)
+      << " -E copy $in $out";
+
+  this->AddRule("COPY_OSX_CONTENT",
+                cmd.str(),
+                "Copying OS X Content $out",
+                "Rule for copying OS X bundle content file."
+                /*depfile*/ "",
+                /*rspfile*/ "");
+}
+
+void
+cmGlobalNinjaGenerator::WriteMacOSXContentBuild(const std::string& input,
+                                                const std::string& output)
+{
+  this->AddMacOSXContentRule();
+
+  cmNinjaDeps outputs;
+  outputs.push_back(output);
+  cmNinjaDeps deps;
+  deps.push_back(input);
+  cmNinjaVars vars;
+
+  cmGlobalNinjaGenerator::WriteBuild(*this->BuildFileStream,
+                                     "",
+                                     "COPY_OSX_CONTENT",
+                                     outputs,
+                                     deps,
+                                     cmNinjaDeps(),
+                                     cmNinjaDeps(),
+                                     cmNinjaVars());
+}
+
 void cmGlobalNinjaGenerator::WriteRule(std::ostream& os,
                                        const std::string& name,
                                        const std::string& command,
                                        const std::string& description,
                                        const std::string& comment,
                                        const std::string& depfile,
+                                       const std::string& rspfile,
+                                       const std::string& rspcontent,
                                        bool restat,
                                        bool generator)
 {
@@ -277,6 +355,19 @@ void cmGlobalNinjaGenerator::WriteRule(std::ostream& os,
     os << "description = " << description << "\n";
     }
 
+  if(!rspfile.empty())
+    {
+    if (rspcontent.empty())
+      {
+      cmSystemTools::Error("No rspfile_content given!", comment.c_str());
+      return;
+      }
+    cmGlobalNinjaGenerator::Indent(os, 1);
+    os << "rspfile = " << rspfile << "\n";
+    cmGlobalNinjaGenerator::Indent(os, 1);
+    os << "rspfile_content = " << rspcontent << "\n";
+    }
+
   if(restat)
     {
     cmGlobalNinjaGenerator::Indent(os, 1);
@@ -288,6 +379,8 @@ void cmGlobalNinjaGenerator::WriteRule(std::ostream& os,
     cmGlobalNinjaGenerator::Indent(os, 1);
     os << "generator = 1\n";
     }
+
+  os << "\n";
 }
 
 void cmGlobalNinjaGenerator::WriteVariable(std::ostream& os,
@@ -341,6 +434,7 @@ cmGlobalNinjaGenerator::cmGlobalNinjaGenerator()
   : cmGlobalGenerator()
   , BuildFileStream(0)
   , RulesFileStream(0)
+  , CompileCommandsStream(0)
   , Rules()
   , AllDependencies()
 {
@@ -348,6 +442,7 @@ cmGlobalNinjaGenerator::cmGlobalNinjaGenerator()
   // this->ForceUnixPaths = true;
   this->FindMakeProgramFile = "CMakeNinjaFindMake.cmake";
 }
+
 
 //----------------------------------------------------------------------------
 // Virtual public methods.
@@ -360,9 +455,9 @@ cmLocalGenerator* cmGlobalNinjaGenerator::CreateLocalGenerator()
 }
 
 void cmGlobalNinjaGenerator
-::GetDocumentation(cmDocumentationEntry& entry) const
+::GetDocumentation(cmDocumentationEntry& entry)
 {
-  entry.Name = this->GetName();
+  entry.Name = cmGlobalNinjaGenerator::GetActualName();
   entry.Brief = "Generates build.ninja files (experimental).";
   entry.Full =
     "A build.ninja file is generated into the build tree. Recent "
@@ -390,6 +485,7 @@ void cmGlobalNinjaGenerator::Generate()
     this->BuildFileStream->setstate(std::ios_base::failbit);
   }
 
+  this->CloseCompileCommandsStream();
   this->CloseRulesFileStream();
   this->CloseBuildFileStream();
 }
@@ -398,31 +494,23 @@ void cmGlobalNinjaGenerator::Generate()
 // Used in:
 //   Source/cmMakefile.cxx:
 void cmGlobalNinjaGenerator
-::EnableLanguage(std::vector<std::string>const& languages,
-                 cmMakefile *mf,
+::EnableLanguage(std::vector<std::string>const& langs,
+                 cmMakefile* makefile,
                  bool optional)
 {
-  this->cmGlobalGenerator::EnableLanguage(languages, mf, optional);
-  std::string path;
-  for(std::vector<std::string>::const_iterator l = languages.begin();
-      l != languages.end(); ++l)
+  if (makefile->IsOn("CMAKE_COMPILER_IS_MINGW"))
     {
-    if(*l == "NONE")
-      {
-      continue;
-      }
-    if(*l == "Fortran")
-      {
-      std::string message = "The \"";
-      message += this->GetName();
-      message += "\" generator does not support the language \"";
-      message += *l;
-      message += "\" yet.";
-      cmSystemTools::Error(message.c_str());
-      }
-    this->ResolveLanguageCompiler(*l, mf, optional);
+    UsingMinGW = true;
+    this->EnableMinGWLanguage(makefile);
     }
+  if (std::find(langs.begin(), langs.end(), "Fortran") != langs.end())
+    {
+    cmSystemTools::Error("The Ninja generator does not support Fortran yet.");
+    }
+  this->cmGlobalGenerator::EnableLanguage(langs, makefile, optional);
 }
+
+bool cmGlobalNinjaGenerator::UsingMinGW = false;
 
 // Implemented by:
 //   cmGlobalUnixMakefileGenerator3
@@ -481,12 +569,16 @@ void cmGlobalNinjaGenerator::AddRule(const std::string& name,
                                      const std::string& description,
                                      const std::string& comment,
                                      const std::string& depfile,
+                                     const std::string& rspfile,
+                                     const std::string& rspcontent,
                                      bool restat,
                                      bool generator)
 {
   // Do not add the same rule twice.
   if (this->HasRule(name))
+    {
     return;
+    }
 
   this->Rules.insert(name);
   cmGlobalNinjaGenerator::WriteRule(*this->RulesFileStream,
@@ -495,8 +587,12 @@ void cmGlobalNinjaGenerator::AddRule(const std::string& name,
                                     description,
                                     comment,
                                     depfile,
+                                    rspfile,
+                                    rspcontent,
                                     restat,
                                     generator);
+
+  this->RuleCmdLength[name] = (int) command.size();
 }
 
 bool cmGlobalNinjaGenerator::HasRule(const std::string &name)
@@ -623,6 +719,55 @@ void cmGlobalNinjaGenerator::CloseRulesFileStream()
    }
 }
 
+void cmGlobalNinjaGenerator::AddCXXCompileCommand(
+                                      const std::string &commandLine,
+                                      const std::string &sourceFile)
+{
+  // Compute Ninja's build file path.
+  std::string buildFileDir =
+    this->GetCMakeInstance()->GetHomeOutputDirectory();
+  if (!this->CompileCommandsStream)
+    {
+    std::string buildFilePath = buildFileDir + "/compile_commands.json";
+
+    // Get a stream where to generate things.
+    this->CompileCommandsStream =
+      new cmGeneratedFileStream(buildFilePath.c_str());
+    *this->CompileCommandsStream << "[";
+    } else {
+    *this->CompileCommandsStream << "," << std::endl;
+    }
+
+  std::string sourceFileName = sourceFile;
+  if (!cmSystemTools::FileIsFullPath(sourceFileName.c_str()))
+    {
+    sourceFileName = cmSystemTools::CollapseFullPath(
+      sourceFileName.c_str(),
+      this->GetCMakeInstance()->GetHomeOutputDirectory());
+    }
+
+
+  *this->CompileCommandsStream << "\n{\n"
+     << "  \"directory\": \""
+     << cmGlobalGenerator::EscapeJSON(buildFileDir) << "\",\n"
+     << "  \"command\": \""
+     << cmGlobalGenerator::EscapeJSON(commandLine) << "\",\n"
+     << "  \"file\": \""
+     << cmGlobalGenerator::EscapeJSON(sourceFileName) << "\"\n"
+     << "}";
+}
+
+void cmGlobalNinjaGenerator::CloseCompileCommandsStream()
+{
+  if (this->CompileCommandsStream)
+    {
+    *this->CompileCommandsStream << "\n]";
+    delete this->CompileCommandsStream;
+    this->CompileCommandsStream = 0;
+    }
+
+}
+
 void cmGlobalNinjaGenerator::WriteDisclaimer(std::ostream& os)
 {
   os
@@ -636,6 +781,11 @@ void cmGlobalNinjaGenerator::WriteDisclaimer(std::ostream& os)
 void cmGlobalNinjaGenerator::AddDependencyToAll(cmTarget* target)
 {
   this->AppendTargetOutputs(target, this->AllDependencies);
+}
+
+void cmGlobalNinjaGenerator::AddDependencyToAll(const std::string& input)
+{
+  this->AllDependencies.push_back(input);
 }
 
 void cmGlobalNinjaGenerator::WriteAssumedSourceDependencies()
@@ -725,7 +875,7 @@ void cmGlobalNinjaGenerator::AddTargetAlias(const std::string& alias,
   // Insert the alias into the map.  If the alias was already present in the
   // map and referred to another target, mark it as ambiguous.
   std::pair<TargetAliasMap::iterator, bool> newAlias =
-    TargetAliases.insert(make_pair(alias, target));
+    TargetAliases.insert(std::make_pair(alias, target));
   if (newAlias.second && newAlias.first->second != target)
     newAlias.first->second = 0;
 }
@@ -783,7 +933,7 @@ void cmGlobalNinjaGenerator::WriteTargetRebuildManifest(std::ostream& os)
   cmLocalGenerator *lg = this->LocalGenerators[0];
   cmMakefile* mfRoot = lg->GetMakefile();
 
-  std::ostringstream cmd;
+  cmOStringStream cmd;
   cmd << lg->ConvertToOutputFormat(
            mfRoot->GetRequiredDefinition("CMAKE_COMMAND"),
            cmLocalGenerator::SHELL)
@@ -799,6 +949,8 @@ void cmGlobalNinjaGenerator::WriteTargetRebuildManifest(std::ostream& os)
             "Re-running CMake...",
             "Rule for re-running cmake.",
             /*depfile=*/ "",
+            /*rspfile=*/ "",
+            /*rspcontent*/ "",
             /*restat=*/ false,
             /*generator=*/ true);
 
@@ -828,14 +980,27 @@ void cmGlobalNinjaGenerator::WriteTargetRebuildManifest(std::ostream& os)
                   cmNinjaDeps());
 }
 
+std::string cmGlobalNinjaGenerator::ninjaCmd() const
+{
+  cmLocalGenerator* lgen = this->LocalGenerators[0];
+  if (lgen) {
+    return lgen->ConvertToOutputFormat(
+             lgen->GetMakefile()->GetRequiredDefinition("CMAKE_MAKE_PROGRAM"),
+                                    cmLocalGenerator::SHELL);
+  }
+  return "ninja";
+}
+
 void cmGlobalNinjaGenerator::WriteTargetClean(std::ostream& os)
 {
   WriteRule(*this->RulesFileStream,
             "CLEAN",
-            "ninja -t clean",
+            (ninjaCmd() + " -t clean").c_str(),
             "Cleaning all built files...",
             "Rule for cleaning all built files.",
             /*depfile=*/ "",
+            /*rspfile=*/ "",
+            /*rspcontent*/ "",
             /*restat=*/ false,
             /*generator=*/ false);
   WriteBuild(os,
@@ -852,10 +1017,12 @@ void cmGlobalNinjaGenerator::WriteTargetHelp(std::ostream& os)
 {
   WriteRule(*this->RulesFileStream,
             "HELP",
-            "ninja -t targets",
+            (ninjaCmd() + " -t targets").c_str(),
             "All primary targets available:",
             "Rule for printing all primary targets available.",
             /*depfile=*/ "",
+            /*rspfile=*/ "",
+            /*rspcontent*/ "",
             /*restat=*/ false,
             /*generator=*/ false);
   WriteBuild(os,

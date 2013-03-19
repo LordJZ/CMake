@@ -457,12 +457,78 @@ cmPolicies::cmPolicies()
     "This makes sure that the modules belonging to "
     "CMake always get those files included which they expect, and against "
     "which they were developed and tested.  "
-    "In call other cases, the files found in "
+    "In all other cases, the files found in "
     "CMAKE_MODULE_PATH still take precedence over the ones in "
     "the CMake module directory.  "
     "The OLD behaviour is to always prefer files from CMAKE_MODULE_PATH over "
     "files from the CMake modules directory.",
     2,8,4,0, cmPolicies::WARN);
+
+    this->DefinePolicy(
+    CMP0018, "CMP0018",
+    "Ignore CMAKE_SHARED_LIBRARY_<Lang>_FLAGS variable.",
+    "CMake 2.8.8 and lower compiled sources in SHARED and MODULE libraries "
+    "using the value of the undocumented CMAKE_SHARED_LIBRARY_<Lang>_FLAGS "
+    "platform variable.  The variable contained platform-specific flags "
+    "needed to compile objects for shared libraries.  Typically it included "
+    "a flag such as -fPIC for position independent code but also included "
+    "other flags needed on certain platforms.  CMake 2.8.9 and higher "
+    "prefer instead to use the POSITION_INDEPENDENT_CODE target property to "
+    "determine what targets should be position independent, and new "
+    "undocumented platform variables to select flags while ignoring "
+    "CMAKE_SHARED_LIBRARY_<Lang>_FLAGS completely."
+    "\n"
+    "The default for either approach produces identical compilation flags, "
+    "but if a project modifies CMAKE_SHARED_LIBRARY_<Lang>_FLAGS from its "
+    "original value this policy determines which approach to use."
+    "\n"
+    "The OLD behavior for this policy is to ignore the "
+    "POSITION_INDEPENDENT_CODE property for all targets and use the modified "
+    "value of CMAKE_SHARED_LIBRARY_<Lang>_FLAGS for SHARED and MODULE "
+    "libraries."
+    "\n"
+    "The NEW behavior for this policy is to ignore "
+    "CMAKE_SHARED_LIBRARY_<Lang>_FLAGS whether it is modified or not and "
+    "honor the POSITION_INDEPENDENT_CODE target property.",
+    2,8,9,0, cmPolicies::WARN);
+
+  this->DefinePolicy(
+    CMP0019, "CMP0019",
+    "Do not re-expand variables in include and link information.",
+    "CMake 2.8.10 and lower re-evaluated values given to the "
+    "include_directories, link_directories, and link_libraries "
+    "commands to expand any leftover variable references at the "
+    "end of the configuration step.  "
+    "This was for strict compatibility with VERY early CMake versions "
+    "because all variable references are now normally evaluated during "
+    "CMake language processing.  "
+    "CMake 2.8.11 and higher prefer to skip the extra evaluation."
+    "\n"
+    "The OLD behavior for this policy is to re-evaluate the values "
+    "for strict compatibility.  "
+    "The NEW behavior for this policy is to leave the values untouched.",
+    2,8,11,0, cmPolicies::WARN);
+
+  this->DefinePolicy(
+    CMP0020, "CMP0020",
+    "Automatically link Qt executables to qtmain target on Windows.",
+    "CMake 2.8.10 and lower required users of Qt to always specify a link "
+    "dependency to the qtmain.lib static library manually on Windows.  CMake "
+    "2.8.11 gained the ability to evaluate generator expressions while "
+    "determining the link dependencies from IMPORTED targets.  This allows "
+    "CMake itself to automatically link executables which link to Qt to the "
+    "qtmain.lib library when using IMPORTED Qt targets.  For applications "
+    "already linking to qtmain.lib, this should have little impact.  For "
+    "applications which supply their own alternative WinMain implementation "
+    "and for applications which use the QAxServer library, this automatic "
+    "linking will need to be disabled as per the documentation."
+    "\n"
+    "The OLD behavior for this policy is not to link executables to "
+    "qtmain.lib automatically when they link to the QtCore IMPORTED"
+    "target.  "
+    "The NEW behavior for this policy is to link executables to "
+    "qtmain.lib automatically when they link to QtCore IMPORTED target.",
+    2,8,11,0, cmPolicies::WARN);
 }
 
 cmPolicies::~cmPolicies()

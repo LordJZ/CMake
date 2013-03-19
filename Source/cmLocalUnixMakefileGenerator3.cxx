@@ -32,8 +32,31 @@
 
 #include <cmsys/auto_ptr.hxx>
 
-#include <memory> // auto_ptr
 #include <queue>
+
+//----------------------------------------------------------------------------
+// Escape special characters in Makefile dependency lines
+class cmMakeSafe
+{
+public:
+  cmMakeSafe(const char* s): Data(s) {}
+  cmMakeSafe(std::string const& s): Data(s.c_str()) {}
+private:
+  const char* Data;
+  friend std::ostream& operator<<(std::ostream& os,
+                                  cmMakeSafe const& self)
+    {
+    for(const char* c = self.Data; *c; ++c)
+      {
+      switch (*c)
+        {
+        case '=': os << "$(EQUALS)"; break;
+        default: os << *c; break;
+        }
+      }
+    return os;
+    }
+};
 
 //----------------------------------------------------------------------------
 // Helper function used below.
@@ -555,28 +578,13 @@ cmLocalUnixMakefileGenerator3
     space = " ";
     }
 
-  // Warn about paths not supported by Make tools.
-  std::string::size_type pos = tgt.find_first_of("=");
-  if(pos != std::string::npos)
-    {
-    cmOStringStream m;
-    m <<
-      "Make rule for\n"
-      "  " << tgt << "\n"
-      "has '=' on left hand side.  "
-      "The make tool may not support this.";
-    cmListFileBacktrace bt;
-    this->GlobalGenerator->GetCMakeInstance()
-      ->IssueMessage(cmake::WARNING, m.str(), bt);
-    }
-
   // Mark the rule as symbolic if requested.
   if(symbolic)
     {
     if(const char* sym =
        this->Makefile->GetDefinition("CMAKE_MAKE_SYMBOLIC_RULE"))
       {
-      os << tgt.c_str() << space << ": " << sym << "\n";
+      os << cmMakeSafe(tgt) << space << ": " << sym << "\n";
       }
     }
 
@@ -584,7 +592,7 @@ cmLocalUnixMakefileGenerator3
   if(depends.empty())
     {
     // No dependencies.  The commands will always run.
-    os << tgt.c_str() << space << ":\n";
+    os << cmMakeSafe(tgt) << space << ":\n";
     }
   else
     {
@@ -595,7 +603,7 @@ cmLocalUnixMakefileGenerator3
       {
       replace = *dep;
       replace = this->Convert(replace.c_str(),HOME_OUTPUT,MAKEFILE);
-      os << tgt.c_str() << space << ": " << replace.c_str() << "\n";
+      os << cmMakeSafe(tgt) << space << ": " << cmMakeSafe(replace) << "\n";
       }
     }
 
@@ -608,7 +616,7 @@ cmLocalUnixMakefileGenerator3
     }
   if(symbolic && !this->WatcomWMake)
     {
-    os << ".PHONY : " << tgt.c_str() << "\n";
+    os << ".PHONY : " << cmMakeSafe(tgt) << "\n";
     }
   os << "\n";
   // Add the output to the local help if requested.
@@ -686,6 +694,10 @@ cmLocalUnixMakefileGenerator3
     << "RM = "
     << this->ConvertShellCommand(cmakecommand, FULL)
     << " -E remove -f\n"
+    << "\n";
+  makefileStream
+    << "# Escaping for special characters.\n"
+    << "EQUALS = =\n"
     << "\n";
 
   if(const char* edit_cmd =
@@ -1926,8 +1938,12 @@ void cmLocalUnixMakefileGenerator3
     for(ImplicitDependFileMap::const_iterator pi = implicitPairs.begin();
         pi != implicitPairs.end(); ++pi)
       {
-      cmakefileStream << "  \"" << pi->second << "\" ";
-      cmakefileStream << "\"" << pi->first << "\"\n";
+      for(cmDepends::DependencyVector::const_iterator di = pi->second.begin();
+          di != pi->second.end(); ++ di)
+        {
+        cmakefileStream << "  \"" << *di << "\" ";
+        cmakefileStream << "\"" << pi->first << "\"\n";
+        }
       }
     cmakefileStream << "  )\n";
 
@@ -1945,34 +1961,17 @@ void cmLocalUnixMakefileGenerator3
     }
 
   // Build a list of preprocessor definitions for the target.
-  std::vector<std::string> defines;
-  {
-  std::string defPropName = "COMPILE_DEFINITIONS_";
-  defPropName += cmSystemTools::UpperCase(this->ConfigurationName);
-  if(const char* ddefs = this->Makefile->GetProperty("COMPILE_DEFINITIONS"))
-    {
-    cmSystemTools::ExpandListArgument(ddefs, defines);
-    }
-  if(const char* cdefs = target.GetProperty("COMPILE_DEFINITIONS"))
-    {
-    cmSystemTools::ExpandListArgument(cdefs, defines);
-    }
-  if(const char* dcdefs = this->Makefile->GetProperty(defPropName.c_str()))
-    {
-    cmSystemTools::ExpandListArgument(dcdefs, defines);
-    }
-  if(const char* ccdefs = target.GetProperty(defPropName.c_str()))
-    {
-    cmSystemTools::ExpandListArgument(ccdefs, defines);
-    }
-  }
+  std::set<std::string> defines;
+  this->AppendDefines(defines, target.GetCompileDefinitions());
+  this->AppendDefines(defines, target.GetCompileDefinitions(
+                                            this->ConfigurationName.c_str()));
   if(!defines.empty())
     {
     cmakefileStream
       << "\n"
       << "# Preprocessor definitions for this target.\n"
       << "SET(CMAKE_TARGET_DEFINITIONS\n";
-    for(std::vector<std::string>::const_iterator di = defines.begin();
+    for(std::set<std::string>::const_iterator di = defines.begin();
         di != defines.end(); ++di)
       {
       cmakefileStream
@@ -2191,7 +2190,7 @@ cmLocalUnixMakefileGenerator3::AddImplicitDepends(cmTarget const& tgt,
                                                   const char* obj,
                                                   const char* src)
 {
-  this->ImplicitDepends[tgt.GetName()][lang][obj] = src;
+  this->ImplicitDepends[tgt.GetName()][lang][obj].push_back(src);
 }
 
 //----------------------------------------------------------------------------
